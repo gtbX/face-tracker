@@ -7,6 +7,8 @@
 #include <iostream>
 #include <stdio.h>
 
+#include <pthread.h>
+
 using namespace std;
 using namespace cv;
 
@@ -15,7 +17,9 @@ void detectAndDisplay( Mat frame );
 
 usb_dev_handle* open_launcher();
 int send_message(char* msg, int index);
-void movement_handler(char control);
+void movement_handler(usb_dev_handle*, char control);
+
+void *slew(void*);
 
 /** Global variables */
 String face_cascade_name = "haarcascade_frontalface_alt.xml";
@@ -25,20 +29,31 @@ CascadeClassifier eyes_cascade;
 string window_name = "Capture - Face detection";
 RNG rng(12345);
 
-usb_dev_handle* launcher;
+pthread_t slew_thread;
+pthread_mutex_t slew_mtx = PTHREAD_MUTEX_INITIALIZER;
 
+#define DOWN    (1)
+#define UP      (2)
+#define LEFT    (4)
+#define RIGHT   (8)
+#define STOP    (32)
+#define DZONE   (10)
 const Size size(256, 256);
-const Point sc(128, 128);
+const Point screen_center(size.width / 2, size.height / 2);
+
+Point target;
 
 /** @function main */
 int main( int argc, const char** argv )
 {
         CvCapture* capture;
         Mat frame;
+        int cam = 1;
 
-        usb_init();
-        launcher = open_launcher();
-        if (!launcher)
+        if (argc > 1)
+                cam = atoi(argv[1]);
+
+        if (pthread_create(&slew_thread, NULL, slew, NULL) != 0)
                 return EXIT_FAILURE;
 
         //-- 1. Load the cascades
@@ -46,7 +61,7 @@ int main( int argc, const char** argv )
         if( !eyes_cascade.load( eyes_cascade_name ) ){ printf("--(!)Error loading\n"); return -1; };
 
         //-- 2. Read the video stream
-        capture = cvCaptureFromCAM( 1 ); // /dev/video1
+        capture = cvCaptureFromCAM( cam );
         if( capture )
         {
                 while( true )
@@ -65,6 +80,54 @@ int main( int argc, const char** argv )
                 }
         }
         return 0;
+}
+
+void* slew(void*)
+{
+        usb_init();
+        usb_dev_handle* launcher = open_launcher();
+        if (!launcher)
+                return (int*) EXIT_FAILURE;
+
+        while(true) {
+                int mult = 1;
+                char cmd = 0;
+
+                pthread_mutex_lock(&slew_mtx);
+                int difx = abs(target.x);
+                int dify = abs(target.y);
+                int len = (int) sqrt(difx * difx + dify * dify);
+
+                if (len < DZONE) {
+                        cmd = STOP;
+                } else if (difx > dify) {
+                        mult = 20;
+                        if (target.x < 0) {
+                                cmd = LEFT;
+                                target.x -= 2;
+                        } else if (target.x > 0) {
+                                cmd = RIGHT;
+                                target.x -= 2;
+                        }
+                } else if (dify > difx) {
+                        mult = 20;
+                        if (target.y > 0) {
+                                cmd = DOWN;
+                                target.y -= 2;
+                        } else if (target.y < 0) {
+                                cmd = UP;
+                                target.y += 2;
+                        }
+                }
+                pthread_mutex_unlock(&slew_mtx);
+
+                if (cmd != 0)
+                        movement_handler(launcher, cmd);
+
+                const struct timespec delaytime = { 0, mult * 100000L };
+                nanosleep(&delaytime, NULL);
+        }
+        return NULL;
 }
 
 usb_dev_handle* open_launcher()
@@ -92,48 +155,19 @@ usb_dev_handle* open_launcher()
         return NULL;
 }
 
-//wrapper for control_msg
-int send_message(char* msg, int index)
+void movement_handler(usb_dev_handle* launcher, char control)
 {
-        int i = 0;
-        int j = usb_control_msg(launcher, 0x21, 0x9, 0x200, index, msg, 8, 1000);
-
-        //be sure that msg is all zeroes again
-        msg[0] = 0x0;
-        msg[1] = 0x0;
-        msg[2] = 0x0;
-        msg[3] = 0x0;
-        msg[4] = 0x0;
-        msg[5] = 0x0;
-        msg[6] = 0x0;
-        msg[7] = 0x0;
-
-        return j;
-}
-
-void movement_handler(char control)
-{
-        char msg[8];
-        //reset
-        msg[0] = 0x0;
-        msg[1] = 0x0;
-        msg[2] = 0x0;
-        msg[3] = 0x0;
-        msg[4] = 0x0;
-        msg[5] = 0x0;
-        msg[6] = 0x0;
-        msg[7] = 0x0;
-
-        //send 0s
-        int deally = send_message(msg, 1);
-
-        //send control
+        static char msg[8];
         msg[0] = control;
-        deally = send_message(msg, 0);
+        msg[1] = 0x0;
+        msg[2] = 0x0;
+        msg[3] = 0x0;
+        msg[4] = 0x0;
+        msg[5] = 0x0;
+        msg[6] = 0x0;
+        msg[7] = 0x0;
 
-        //and more zeroes
-        deally = send_message(msg, 1);
-
+        usb_control_msg(launcher, 0x21, 0x9, 0x200, 0, msg, 8, 1000);
 }
 
 /** @function detectAndDisplay */
@@ -149,16 +183,16 @@ void detectAndDisplay( Mat frame )
         face_cascade.detectMultiScale( frame_gray, faces, 1.1, 2, 0|CV_HAAR_SCALE_IMAGE, Size(30, 30) );
 
         int least_dist2 = INT_MAX;
-        Point target;
+        Point new_target;
         for( size_t i = 0; i < faces.size(); i++ )
         {
                 Point center( faces[i].x + faces[i].width*0.5, faces[i].y + faces[i].height*0.5 );
                 ellipse( frame, center, Size( faces[i].width*0.5, faces[i].height*0.5), 0, 0, 360, Scalar( 255, 0, 255 ), 4, 8, 0 );
 
-                Point diff = center - sc;
+                Point diff = center - screen_center;
                 int dist2 = diff.x * diff.x + diff.y * diff.y;
                 if (dist2 < least_dist2) {
-                        target = diff;
+                        new_target = diff;
                         least_dist2 = dist2;
                 }
 
@@ -175,23 +209,13 @@ void detectAndDisplay( Mat frame )
                         circle( frame, center, radius, Scalar( 255, 0, 0 ), 4, 8, 0 );
                 }
         }
-        printf ("Found target at (%d, %d)!\n", target.x, target.y);
 
-        // slew into position
-        int difx = abs(target.x);
-        int dify = abs(target.y);
-        if (difx > dify) {
-                if (target.x < 0)
-                        movement_handler(4);
-                else if (target.x > 0)
-                        movement_handler(8);
-        } else if (dify > difx) {
-                if (target.y > 0)
-                        movement_handler(1);
-                else if (target.y < 0)
-                        movement_handler(2);
-        } else
-                movement_handler(32);
+        if (sqrt(least_dist2) >= DZONE) {
+                printf ("Found target at (%d, %d)! range: %lf\n", new_target.x, new_target.y, sqrt(least_dist2));
+                pthread_mutex_lock(&slew_mtx);
+                target = new_target;
+                pthread_mutex_unlock(&slew_mtx);
+        }
 
         //-- Show what you got
         imshow( window_name, frame );
