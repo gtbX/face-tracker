@@ -47,7 +47,6 @@ Point target;
 int main( int argc, const char** argv )
 {
         CvCapture* capture;
-        Mat frame;
         int cam = 1;
 
         if (argc > 1)
@@ -66,8 +65,7 @@ int main( int argc, const char** argv )
         {
                 while( true )
                 {
-                        Mat large = cvQueryFrame( capture );
-                        resize(large, frame, size);
+                        Mat frame = cvQueryFrame( capture );
 
                         //-- 3. Apply the classifier to the frame
                         if( !frame.empty() )
@@ -100,6 +98,7 @@ void* slew(void*)
 
                 if (len < DZONE) {
                         cmd = STOP;
+                        mult = 20;
                 } else if (difx > dify) {
                         mult = 20;
                         if (target.x < 0) {
@@ -171,11 +170,14 @@ void movement_handler(usb_dev_handle* launcher, char control)
 }
 
 /** @function detectAndDisplay */
-void detectAndDisplay( Mat frame )
+void detectAndDisplay( Mat large )
 {
         std::vector<Rect> faces;
+        Mat frame;
         Mat frame_gray;
 
+        resize(large, frame, size);
+        const Size2f mult((float) large.cols / size.width, (float) large.rows / size.height);
         cvtColor( frame, frame_gray, CV_BGR2GRAY );
         equalizeHist( frame_gray, frame_gray );
 
@@ -187,7 +189,6 @@ void detectAndDisplay( Mat frame )
         for( size_t i = 0; i < faces.size(); i++ )
         {
                 Point center( faces[i].x + faces[i].width*0.5, faces[i].y + faces[i].height*0.5 );
-                ellipse( frame, center, Size( faces[i].width*0.5, faces[i].height*0.5), 0, 0, 360, Scalar( 255, 0, 255 ), 4, 8, 0 );
 
                 Point diff = center - screen_center;
                 int dist2 = diff.x * diff.x + diff.y * diff.y;
@@ -195,6 +196,13 @@ void detectAndDisplay( Mat frame )
                         new_target = diff;
                         least_dist2 = dist2;
                 }
+
+                Size radii( faces[i].width*0.5, faces[i].height*0.5);
+                center.x *= mult.width;
+                center.y *= mult.height;
+                radii.width *= mult.width;
+                radii.height *= mult.height;
+                ellipse( large, center, radii, 0, 0, 360, Scalar( 255, 0, 255 ), 4, 8, 0 );
 
                 Mat faceROI = frame_gray( faces[i] );
                 std::vector<Rect> eyes;
@@ -205,18 +213,21 @@ void detectAndDisplay( Mat frame )
                 for( size_t j = 0; j < eyes.size(); j++ )
                 {
                         Point center( faces[i].x + eyes[j].x + eyes[j].width*0.5, faces[i].y + eyes[j].y + eyes[j].height*0.5 );
+                        center.x *= mult.width;
+                        center.y *= mult.height;
                         int radius = cvRound( (eyes[j].width + eyes[j].height)*0.25 );
-                        circle( frame, center, radius, Scalar( 255, 0, 0 ), 4, 8, 0 );
+                        circle( large, center, radius, Scalar( 255, 0, 0 ), 4, 8, 0 );
                 }
         }
 
         if (sqrt(least_dist2) >= DZONE) {
-                printf ("Found target at (%d, %d)! range: %lf\n", new_target.x, new_target.y, sqrt(least_dist2));
+                if (least_dist2 != INT_MAX)
+                        printf ("Found target at (%d, %d)! range: %lf\n", new_target.x, new_target.y, sqrt(least_dist2));
                 pthread_mutex_lock(&slew_mtx);
                 target = new_target;
                 pthread_mutex_unlock(&slew_mtx);
         }
 
         //-- Show what you got
-        imshow( window_name, frame );
+        imshow( window_name, large );
 }
