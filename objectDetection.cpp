@@ -9,6 +9,10 @@
 
 #include <pthread.h>
 
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/videodev2.h>
+
 using namespace std;
 using namespace cv;
 
@@ -20,6 +24,8 @@ int send_message(char* msg, int index);
 void movement_handler(usb_dev_handle*, char control);
 
 void *slew(void*);
+
+int open_vout(int w, int h);
 
 /** Global variables */
 String face_cascade_name = "haarcascade_frontalface_alt.xml";
@@ -37,11 +43,14 @@ pthread_mutex_t slew_mtx = PTHREAD_MUTEX_INITIALIZER;
 #define LEFT    (4)
 #define RIGHT   (8)
 #define STOP    (32)
-#define DZONE   (10)
+#define DZONE   (25)
 const Size size(256, 256);
 const Point screen_center(size.width / 2, size.height / 2);
 
 Point target;
+
+const char* sink_name = NULL;
+int sink = -1;
 
 /** @function main */
 int main( int argc, const char** argv )
@@ -51,6 +60,9 @@ int main( int argc, const char** argv )
 
         if (argc > 1)
                 cam = atoi(argv[1]);
+
+        if (argc > 2)
+                sink_name = argv[2];
 
         if (pthread_create(&slew_thread, NULL, slew, NULL) != 0)
                 return EXIT_FAILURE;
@@ -80,6 +92,36 @@ int main( int argc, const char** argv )
         return 0;
 }
 
+int open_vout(int w, int h)
+{
+        if (!sink_name)
+                return -1;
+        int out = open(sink_name, O_WRONLY);
+        if (out < 0) {
+                perror("Failed to open v4l2sink device.");
+                return out;
+        }
+
+        struct v4l2_format v;
+        int t;
+        v.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+        t = ioctl(out, VIDIOC_G_FMT, &v);
+        if (t < 0) {
+                close(out);
+                return -1;
+        }
+        v.fmt.pix.width = w;
+        v.fmt.pix.height = h;
+        v.fmt.pix.pixelformat = V4L2_PIX_FMT_BGR24;
+        v.fmt.pix.sizeimage = w * h * 3;
+        t = ioctl(out, VIDIOC_S_FMT, &v);
+        if (t < 0) {
+                close(out);
+                out = -1;
+        }
+        return out;
+}
+
 void* slew(void*)
 {
         usb_init();
@@ -94,28 +136,28 @@ void* slew(void*)
                 pthread_mutex_lock(&slew_mtx);
                 int difx = abs(target.x);
                 int dify = abs(target.y);
-                int len = (int) sqrt(difx * difx + dify * dify);
+                double len = sqrt(difx * difx + dify * dify);
 
                 if (len < DZONE) {
                         cmd = STOP;
                         mult = 20;
                 } else if (difx > dify) {
-                        mult = 20;
+                        mult = 30;
                         if (target.x < 0) {
                                 cmd = LEFT;
-                                target.x -= 2;
+                                target.x++ ;
                         } else if (target.x > 0) {
                                 cmd = RIGHT;
-                                target.x -= 2;
+                                target.x--;
                         }
-                } else if (dify > difx) {
-                        mult = 20;
+                } else {
+                        mult = 30;
                         if (target.y > 0) {
                                 cmd = DOWN;
-                                target.y -= 2;
+                                target.y--;
                         } else if (target.y < 0) {
                                 cmd = UP;
-                                target.y += 2;
+                                target.y++;
                         }
                 }
                 pthread_mutex_unlock(&slew_mtx);
@@ -198,11 +240,7 @@ void detectAndDisplay( Mat large )
                 }
 
                 Size radii( faces[i].width*0.5, faces[i].height*0.5);
-                center.x *= mult.width;
-                center.y *= mult.height;
-                radii.width *= mult.width;
-                radii.height *= mult.height;
-                ellipse( large, center, radii, 0, 0, 360, Scalar( 255, 0, 255 ), 4, 8, 0 );
+                ellipse( frame, center, radii, 0, 0, 360, Scalar( 255, 0, 255 ), 4, 8, 0 );
 
                 Mat faceROI = frame_gray( faces[i] );
                 std::vector<Rect> eyes;
@@ -213,21 +251,32 @@ void detectAndDisplay( Mat large )
                 for( size_t j = 0; j < eyes.size(); j++ )
                 {
                         Point center( faces[i].x + eyes[j].x + eyes[j].width*0.5, faces[i].y + eyes[j].y + eyes[j].height*0.5 );
-                        center.x *= mult.width;
-                        center.y *= mult.height;
                         int radius = cvRound( (eyes[j].width + eyes[j].height)*0.25 );
-                        circle( large, center, radius, Scalar( 255, 0, 0 ), 4, 8, 0 );
+                        circle( frame, center, radius, Scalar( 255, 0, 0 ), 4, 8, 0 );
                 }
         }
 
-        if (sqrt(least_dist2) >= DZONE) {
-                if (least_dist2 != INT_MAX)
-                        printf ("Found target at (%d, %d)! range: %lf\n", new_target.x, new_target.y, sqrt(least_dist2));
+        if (least_dist2 != INT_MAX && sqrt(least_dist2) >= DZONE) {
+                printf ("Found target at (%d, %d)! range: %lf\n", new_target.x, new_target.y, sqrt(least_dist2));
                 pthread_mutex_lock(&slew_mtx);
                 target = new_target;
                 pthread_mutex_unlock(&slew_mtx);
         }
 
         //-- Show what you got
-        imshow( window_name, large );
+        imshow( window_name, frame );
+
+        // dump into capture device
+        static bool initd = false;
+        if (!initd) {
+                sink = open_vout(large.cols, large.rows);
+                initd = true;
+        }
+        if (sink >= 0) {
+                int size = large.cols * large.rows * 3;
+                if (size != write(sink, large.data, size)) {
+                        close(sink);
+                        sink = -1;
+                }
+        }
 }
