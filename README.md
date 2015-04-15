@@ -19,6 +19,13 @@ $ make
 
 ## Usage
 
+### Supported Model
+
+USB Rocket Launcher is made by Dream Cheeky:
+* 0a81:0701 Chesen Electronics Corp. USB Missile Launcher
+
+Other models may work, with adaptation.
+
 ### OpenCV Data files
 Requires the following files to be copied from your OpenCV installation to the current directory:
 * haarcascade_frontalface_alt.xml
