@@ -37,7 +37,7 @@ After that, the objectdetection demo should be able to access the launcher.
 
 Launch the program as such:
 
-$ ./objectDetection <camera-no> [output-device]
+$ ./objectDetection {camera-no} [output-device]
 
 Where:
 * camera-no: Number for the camera to use as input.  For example, if your webcam is on /dev/video0, put 0 here.
