@@ -35,7 +35,8 @@ Requires the following files to be copied from your OpenCV installation to the c
 On Linux, the kernel "usbhid" driver will probably claim exclusive access to the USB rocket launcher device.  In order to unbind it from the driver (and avoid needing to be root all the time), the unbind_usb.sh script is provided.  Run it after plugging in the rocket launcher:
 
 $ ./unbind_usb.sh [USB VID/PID]
-(see script contents for format)
+
+(see script contents for arg format)
 (TODO: This would be totally rad as a udev rule instead!)
 
 After that, the objectdetection demo should be able to access the launcher.
