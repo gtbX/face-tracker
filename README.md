@@ -32,11 +32,11 @@ Requires the following files to be copied from your OpenCV installation to the c
 * haarcascade_eye_tree_eyeglasses.xml
 
 ### Linux usbhid unbinding
-On Linux, the kernel "usbhid" driver will probably claim exclusive access to the USB rocket launcher device.  In order to unbind it from the driver (and avoid needing to be root all the time) use the following procedure:
+On Linux, the kernel "usbhid" driver will probably claim exclusive access to the USB rocket launcher device.  In order to unbind it from the driver (and avoid needing to be root all the time), the unbind_usb.sh script is provided.  Run it after plugging in the rocket launcher:
 
-* Use "ls /sys/bus/usb/drivers/usbhid/" to list the devices currently bound by usbhid.  The device will probably be something like "2-1.2:1.0"
- * Use lsusb to disambiguate devices if necessary.  Unbinding the wrong device could cause you to lose your keyboard or something.
-* Run "sudo sh -c 'echo [device-id-here] > /sys/bus/usb/drivers/usbhid/unbind'"
+$ ./unbind_usb.sh [USB VID/PID]
+(see script contents for format)
+(TODO: This would be totally rad as a udev rule instead!)
 
 After that, the objectdetection demo should be able to access the launcher.
 
@@ -50,4 +50,4 @@ Where:
 * camera-no: Number for the camera to use as input.  For example, if your webcam is on /dev/video0, put 0 here.
 * output-device (optional): If using v4l2loopback to stream video out, put the full path to the device here (eg. /dev/video1)
 
-Have fun! Don't put your eye out!
+Have fun! Don't shoot your eye out!
